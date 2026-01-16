@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CONN Tool Manager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+        .terminal {
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            font-family: 'Courier New', Courier, monospace;
+            height: 300px;
+            overflow-y: scroll;
+            border-radius: 5px;
+            border: 1px solid #333;
+            font-size: 0.9rem;
+            white-space: pre-wrap;
+        }
+        .nav-tabs .nav-link { color: #495057; }
+        .nav-tabs .nav-link.active { font-weight: bold; }
+        .folder-item { cursor: pointer; padding: 5px; border-radius: 4px; }
+        .folder-item:hover { background-color: #e9ecef; }
+        .modal-body { max-height: 400px; overflow-y: auto; }
+        #log-container { margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="container py-5">
+    <h2 class="mb-4">CONN Tool Manager</h2>
+
+    <ul class="nav nav-tabs" id="myTab" role="tablist">
+        <li class="nav-item">
+            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#reorganize">Reorganize Data</button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#map-ids">Map IDs</button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#export">Light Export</button>
+        </li>
+    </ul>
+
+    <div class="tab-content border border-top-0 p-4 bg-white shadow-sm rounded-bottom">
+        <!-- Reorganize Data -->
+        <div class="tab-pane fade show active" id="reorganize">
+            <p class="text-muted">Standardizes fMRIPrep output for consistency across sessions.</p>
+            <div class="mb-3">
+                <label class="form-label">Base Directory (BIDS Root)</label>
+                <div class="input-group">
+                    <input type="text" class="form-control" id="reorganize-path" placeholder="/path/to/bids">
+                    <button class="btn btn-outline-secondary" onclick="openFileBrowser('reorganize-path', 'dir')">...</button>
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="runScript('reorganize')">Run Reorganize</button>
+        </div>
+
+        <!-- Map IDs -->
+        <div class="tab-pane fade" id="map-ids">
+            <p class="text-muted">Maps BIDS participant IDs to CONN subject IDs.</p>
+            <div class="mb-3">
+                <label class="form-label">CONN Project file (.mat)</label>
+                <div class="input-group">
+                    <input type="text" class="form-control" id="map-conn-path" placeholder="/path/to/project.mat">
+                    <button class="btn btn-outline-secondary" onclick="openFileBrowser('map-conn-path', 'file', '.mat')">...</button>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">BIDS Folder</label>
+                <div class="input-group">
+                    <input type="text" class="form-control" id="map-bids-path" placeholder="/path/to/bids">
+                    <button class="btn btn-outline-secondary" onclick="openFileBrowser('map-bids-path', 'dir')">...</button>
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="runScript('map-ids')">Run Mapping</button>
+        </div>
+
+        <!-- Export -->
+        <div class="tab-pane fade" id="export">
+            <p class="text-muted">Creates a lightweight copy of a CONN project by excluding heavy denoised files.</p>
+            <div class="mb-3">
+                <label class="form-label">Source Project file (.mat)</label>
+                <div class="input-group">
+                    <input type="text" class="form-control" id="export-source-path" placeholder="/path/to/project.mat">
+                    <button class="btn btn-outline-secondary" onclick="openFileBrowser('export-source-path', 'file', '.mat')">...</button>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Destination Directory</label>
+                <div class="input-group">
+                    <input type="text" class="form-control" id="export-dest-path" placeholder="/path/to/export">
+                    <button class="btn btn-outline-secondary" onclick="openFileBrowser('export-dest-path', 'dir')">...</button>
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="runScript('export')">Run Export</button>
+        </div>
+    </div>
+
+    <!-- Terminal Window -->
+    <div id="log-container">
+        <h5>Terminal Status</h5>
+        <div id="terminal" class="terminal" placeholder="Process logs will appear here..."></div>
+        <button class="btn btn-sm btn-outline-danger mt-2" onclick="clearTerminal()">Clear Logs</button>
+    </div>
+</div>
+
+<!-- File Browser Modal -->
+<div class="modal fade" id="fileBrowserModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Select <span id="browser-type-label">File/Folder</span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="d-flex mb-3">
+                    <input type="text" class="form-control me-2" id="current-browser-path" readonly>
+                    <button class="btn btn-sm btn-secondary" onclick="goUp()">UP</button>
+                </div>
+                <div id="file-list" class="list-group">
+                    <!-- Loaded dynamically -->
+                </div>
+            </div>
+            <div class="modal-footer d-flex justify-content-between">
+                <div>
+                   <input type="text" id="new-dir-name" class="form-control form-control-sm border-secondary d-inline-block w-auto" placeholder="New folder name...">
+                   <button class="btn btn-sm btn-outline-success" onclick="createNewDir()">Create Directoy</button>
+                </div>
+                <button type="button" class="btn btn-primary" onclick="selectPath()">Select Path</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    let currentInputId = '';
+    let browserMode = 'dir'; // 'dir' or 'file'
+    let fileExtension = '';
+    let browserModal;
+
+    document.addEventListener('DOMContentLoaded', () => {
+        browserModal = new bootstrap.Modal(document.getElementById('fileBrowserModal'));
+    });
+
+    function openFileBrowser(inputId, mode, ext = '') {
+        currentInputId = inputId;
+        browserMode = mode;
+        fileExtension = ext;
+        document.getElementById('browser-type-label').innerText = mode === 'dir' ? 'Folder' : 'File';
+        
+        const initialPath = document.getElementById(inputId).value || '/';
+        loadPath(initialPath);
+        browserModal.show();
+    }
+
+    async function loadPath(path) {
+        const res = await fetch(`/api/ls?path=${encodeURIComponent(path)}`);
+        const data = await res.json();
+        
+        if (data.error) {
+            alert(data.error);
+            return;
+        }
+
+        document.getElementById('current-browser-path').value = data.current_path;
+        const list = document.getElementById('file-list');
+        list.innerHTML = '';
+
+        data.items.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'list-group-item folder-item d-flex justify-content-between align-items-center';
+            div.innerHTML = `<span>${item.is_dir ? '📁' : '📄'} ${item.name}</span>`;
+            
+            div.onclick = () => {
+                if (item.is_dir) {
+                    loadPath(item.path);
+                } else if (browserMode === 'file') {
+                    document.getElementById('current-browser-path').value = item.path;
+                    // Highlight selected
+                    Array.from(list.children).forEach(c => c.classList.remove('active'));
+                    div.classList.add('active');
+                }
+            };
+            list.appendChild(div);
+        });
+    }
+
+    function goUp() {
+        const current = document.getElementById('current-browser-path').value;
+        const parent = current.substring(0, current.lastIndexOf('/')) || '/';
+        loadPath(parent);
+    }
+
+    async function createNewDir() {
+        const name = document.getElementById('new-dir-name').value;
+        const current = document.getElementById('current-browser-path').value;
+        if (!name) return;
+
+        const res = await fetch('/api/mkdir', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ path: current, name: name })
+        });
+        const data = await res.json();
+        if (data.success) {
+            document.getElementById('new-dir-name').value = '';
+            loadPath(current);
+        } else {
+            alert("Error: " + data.error);
+        }
+    }
+
+    function selectPath() {
+        const selected = document.getElementById('current-browser-path').value;
+        document.getElementById(currentInputId).value = selected;
+        browserModal.hide();
+    }
+
+    function clearTerminal() {
+        document.getElementById('terminal').innerHTML = '';
+    }
+
+    function appendToTerminal(text) {
+        const term = document.getElementById('terminal');
+        term.innerHTML += text;
+        term.scrollTop = term.scrollHeight;
+    }
+
+    function runScript(type) {
+        let url = '';
+        let params = {};
+
+        if (type === 'reorganize') {
+            url = '/run/reorganize';
+            params = { path: document.getElementById('reorganize-path').value };
+        } else if (type === 'map-ids') {
+            url = '/run/map-ids';
+            params = { 
+                conn: document.getElementById('map-conn-path').value,
+                bids: document.getElementById('map-bids-path').value
+            };
+        } else if (type === 'export') {
+            url = '/run/export';
+            params = { 
+                source: document.getElementById('export-source-path').value,
+                dest: document.getElementById('export-dest-path').value
+            };
+        }
+
+        appendToTerminal(`\n>>> EXECUTING ${type.toUpperCase()}...\n`);
+
+        const eventSource = new EventSource(`${url}?${new URLSearchParams(params)}`);
+        
+        eventSource.onmessage = function(event) {
+            if (event.data === '[DONE]') {
+                eventSource.close();
+                appendToTerminal("\n--- Process Finished ---\n");
+            } else {
+                appendToTerminal(event.data + "\n");
+            }
+        };
+
+        eventSource.onerror = function() {
+            eventSource.close();
+            appendToTerminal("\n[ERROR] Connection lost or process failed.\n");
+        };
+    }
+</script>
+
+</body>
+</html>
