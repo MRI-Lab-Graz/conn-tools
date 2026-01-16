@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# CONN / MATLAB
+*.mat
+*.nii
+*.nii.gz
+results/
+data/
+preprocessing/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+participants.tsv
+participants.json
+*.html
+*.log
+logfile.txt
