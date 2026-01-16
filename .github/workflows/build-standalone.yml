@@ -11,17 +11,21 @@ jobs:
     name: Build for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             artifact_name: conn-tools-linux
             asset_name: conn-tools-linux
+            sep: ":"
           - os: windows-latest
             artifact_name: conn-tools-windows
             asset_name: conn-tools-windows.exe
+            sep: ";"
           - os: macos-14 # Apple Silicon
             artifact_name: conn-tools-macos-arm64
             asset_name: conn-tools-macos-arm64
+            sep: ":"
 
     steps:
       - name: Checkout code
@@ -37,14 +41,14 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install -r requirements.txt
+          uv pip install --system -r requirements.txt
 
       - name: Build with PyInstaller
         shell: bash
         run: |
           pyinstaller --onefile --windowed \
-            --add-data "templates:templates" \
-            --add-data "scripts_py:scripts_py" \
+            --add-data "templates${{ matrix.sep }}templates" \
+            --add-data "scripts_py${{ matrix.sep }}scripts_py" \
             --name ${{ matrix.artifact_name }} \
             app.py
 
