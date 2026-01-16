@@ -28,6 +28,5 @@ Thumbs.db
 .vscode/
 
 # Project-specific logs
-*.html
 *.log
 logfile.txt
