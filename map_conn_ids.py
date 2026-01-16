@@ -5,23 +5,17 @@ import re
 import csv
 import sys
 
-def main():
-    parser = argparse.ArgumentParser(description='Map BIDS participant IDs to CONN subject IDs.')
-    parser.add_argument('-conn', required=True, help='Path to the CONN project .mat file')
-    parser.add_argument('-bids', required=True, help='Path to the BIDS folder (containing participants.tsv)')
-    
-    args = parser.parse_args()
-    
-    conn_mat = os.path.abspath(args.conn)
-    bids_dir = os.path.abspath(args.bids)
+def run_mapping(conn_path, bids_dir):
+    conn_mat = os.path.abspath(conn_path)
+    bids_dir = os.path.abspath(bids_dir)
     
     if not os.path.exists(conn_mat):
         print(f"Error: CONN project file not found: {conn_mat}")
-        sys.exit(1)
+        return
         
     if not os.path.exists(bids_dir):
         print(f"Error: BIDS directory not found: {bids_dir}")
-        sys.exit(1)
+        return
         
     # CONN log file is usually in a directory with the same name as the .mat file (without .mat)
     conn_name = os.path.splitext(os.path.basename(conn_mat))[0]
@@ -30,12 +24,12 @@ def main():
     
     if not os.path.exists(log_path):
         print(f"Error: CONN log file not found at expected location: {log_path}")
-        sys.exit(1)
+        return
         
     participants_tsv = os.path.join(bids_dir, 'participants.tsv')
     if not os.path.exists(participants_tsv):
         print(f"Error: participants.tsv not found in {bids_dir}")
-        sys.exit(1)
+        return
         
     # 1. Parse log file for mapping
     # Searching for: "functional ...sub-134001... imported to subject 1 session 1"
@@ -63,7 +57,7 @@ def main():
         lines = f.readlines()
         if not lines:
             print("Error: participants.tsv is empty.")
-            sys.exit(1)
+            return
             
         header = lines[0].strip().split('\t')
         conn_id_idx = -1
@@ -109,6 +103,14 @@ def main():
             f.write(row + '\n')
             
     print(f"Successfully saved updated participants list to: {output_path}")
+
+def main():
+    parser = argparse.ArgumentParser(description='Map BIDS participant IDs to CONN subject IDs.')
+    parser.add_argument('-conn', required=True, help='Path to the CONN project .mat file')
+    parser.add_argument('-bids', required=True, help='Path to the BIDS folder (containing participants.tsv)')
+    
+    args = parser.parse_args()
+    run_mapping(args.conn, args.bids)
 
 if __name__ == '__main__':
     main()

@@ -3,17 +3,34 @@ import subprocess
 import sys
 import json
 import webbrowser
+import threading
+import queue
+import io
+import contextlib
 from threading import Timer
 from flask import Flask, render_template, request, Response, jsonify
 from waitress import serve
 
+# Helper to find resources in bundled apps (PyInstaller)
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
 # Import local modules
 from scripts_py.reorganize_data import reorganize_data
 from scripts_py.export_light import export_light
+import map_conn_ids
 
-app = Flask(__name__)
+app = Flask(__name__, 
+            template_folder=resource_path('templates'),
+            static_folder=resource_path('static'))
 
 # --- API Endpoints ---
+# ... (rest of the file remains the same until the runner)
 
 @app.route('/')
 def index():
@@ -59,38 +76,55 @@ def make_dir():
 
 # --- Runner Endpoints with Streaming ---
 
-def run_command(cmd_args):
-    """Executes a command and yields output line by line."""
-    process = subprocess.Popen(
-        [sys.executable] + cmd_args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        universal_newlines=True
-    )
-    for line in iter(process.stdout.readline, ""):
-        yield f"data: {line.strip()}\n\n"
-    process.stdout.close()
-    process.wait()
-    yield "data: [DONE]\n\n"
+class StreamProcessor(io.StringIO):
+    def __init__(self, q):
+        super().__init__()
+        self.q = q
+    def write(self, s):
+        if s.strip():
+            self.q.put(s.strip())
+        return super().write(s)
+
+def run_in_thread(func, args, q):
+    # Capture stdout and stderr
+    with contextlib.redirect_stdout(StreamProcessor(q)):
+        with contextlib.redirect_stderr(StreamProcessor(q)):
+            try:
+                func(*args)
+            except Exception as e:
+                print(f"Error: {str(e)}")
+    q.put("[DONE]")
+
+def stream_from_queue(q):
+    while True:
+        msg = q.get()
+        if msg == "[DONE]":
+            yield "data: [DONE]\n\n"
+            break
+        yield f"data: {msg}\n\n"
 
 @app.route('/run/reorganize')
 def run_reorganize():
     path = request.args.get('path')
-    return Response(run_command(["scripts_py/reorganize_data.py", path]), mimetype='text/event-stream')
+    q = queue.Queue()
+    threading.Thread(target=run_in_thread, args=(reorganize_data, [path], q)).start()
+    return Response(stream_from_queue(q), mimetype='text/event-stream')
 
 @app.route('/run/map-ids')
 def run_map_ids():
     conn = request.args.get('conn')
     bids = request.args.get('bids')
-    return Response(run_command(["map_conn_ids.py", "-conn", conn, "-bids", bids]), mimetype='text/event-stream')
+    q = queue.Queue()
+    threading.Thread(target=run_in_thread, args=(map_conn_ids.run_mapping, [conn, bids], q)).start()
+    return Response(stream_from_queue(q), mimetype='text/event-stream')
 
 @app.route('/run/export')
 def run_export():
     source = request.args.get('source')
     dest = request.args.get('dest')
-    return Response(run_command(["scripts_py/export_light.py", source, dest]), mimetype='text/event-stream')
+    q = queue.Queue()
+    threading.Thread(target=run_in_thread, args=(export_light, [source, dest], q)).start()
+    return Response(stream_from_queue(q), mimetype='text/event-stream')
 
 if __name__ == '__main__':
     port = 5000
