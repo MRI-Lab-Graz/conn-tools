@@ -1,0 +1,71 @@
+{
+  "description": "CONN configuration for fMRIprep data import, smoothing, and denoising",
+  "project": {
+    "name": "fMRIprep_Analysis",
+    "directory": "/path/to/project/directory"
+  },
+  "data": {
+    "fmriprep_directory": "/path/to/fmriprep/dataset",
+    "repetition_time": 2.0,
+    "space": "MNI152NLin2009cAsym"
+  },
+  "preprocessing": {
+    "smoothing": {
+      "enabled": true,
+      "fwhm_mm": 8
+    }
+  },
+  "denoising": {
+    "bandpass_filter": {
+      "low_hz": 0.008,
+      "high_hz": "Inf"
+    },
+    "detrending": {
+      "order": 1,
+      "description": "0=none, 1=linear, 2=quadratic, 3=cubic"
+    },
+    "despiking": {
+      "enabled": false,
+      "timing": "before_regression",
+      "description": "0=disabled, 1=before_regression, 2=after_regression"
+    },
+    "regression_bandpass_order": 1,
+    "description": "1=RegBP(regression then bandpass), 2=Simult(simultaneous)"
+  },
+  "confounds": {
+    "include": [
+      "White Matter",
+      "CSF"
+    ],
+    "motion_regressors": true,
+    "motion_scrubbing": true,
+    "include_derivatives": false,
+    "include_powers": false,
+    "description": "Standard noise components from fMRIprep"
+  },
+  "quality_assurance": {
+    "generate_plots": true,
+    "plot_types": [
+      "mean_functional",
+      "denoise_histogram",
+      "denoise_timeseries",
+      "fc_qc_associations"
+    ]
+  },
+  "parallel": {
+    "enabled": false,
+    "num_jobs": 1,
+    "profile": null,
+    "description": "Set enabled=true and profile='slurm'/'sge'/'pbs' for HPC"
+  },
+  "notes": {
+    "data_discovery": "Script automatically discovers sub-*/func/*space-MNI152NLin2009cAsym*bold.nii.gz",
+    "structural": "Uses T1w in anat/ directory (MNI normalized)",
+    "expected_tr": "Adjust repetition_time based on your acquisition",
+    "confound_levels": [
+      "standard (WM, CSF)",
+      "with_motion (WM, CSF + motion params)",
+      "conservative (WM, CSF + motion + derivatives)"
+    ]
+  }
+}
