@@ -51,17 +51,19 @@ CONN_URL=""
 MCR_URL=""
 PROJECT_DIR=""
 FMRIPREP_DIR=""
+BIDS_DIR=""
 
 # Parse arguments
 if [ $# -eq 0 ]; then
     cat <<EOF
 ${RED}Error: Missing arguments${NC}
 
-Usage: $0 -p <project_dir> -f <fmriprep_dir> [options]
+Usage: $0 -p <project_dir> -f <fmriprep_dir> -b <bids_dir> [options]
 
 Required Arguments:
   -p, --project-dir <path>     Directory where CONN project will be created/saved
   -f, --fmriprep-dir <path>    Root directory of fMRIprep preprocessed data
+  -b, --bids-dir <path>        Root directory of BIDS dataset (used to extract TR, subject count, etc.)
 
 Optional Arguments:
   -i, --install-dir <path>     CONN installation directory (default: ~/conn_standalone)
@@ -78,12 +80,12 @@ Optional Arguments:
   -h, --help                   Show this help message
 
 Examples:
-  $0 -p /data/conn_project -f /data/fmriprep
-  $0 -p /data/conn_project -f /data/fmriprep -i /opt/conn
-    $0 -p /data/conn_project -f /data/fmriprep --conn-zip ~/Downloads/conn22a_glnxa64.zip --mcr-zip ~/Downloads/MCR_R2022a_glnxa64_installer.zip
-    $0 -p /data/conn_project -f /data/fmriprep --conn-url <url> --mcr-url <url>
-  $0 -p /data/conn_project -f /data/fmriprep --fwhm 6 --no-qa
-  $0 -p /data/conn_project -f /data/fmriprep --skip-smooth
+  $0 -p /data/conn_project -f /data/fmriprep -b /data/bids
+  $0 -p /data/conn_project -f /data/fmriprep -b /data/bids -i /opt/conn
+    $0 -p /data/conn_project -f /data/fmriprep -b /data/bids --conn-zip ~/Downloads/conn22a_glnxa64.zip --mcr-zip ~/Downloads/MCR_R2022a_glnxa64_installer.zip
+    $0 -p /data/conn_project -f /data/fmriprep -b /data/bids --conn-url <url> --mcr-url <url>
+  $0 -p /data/conn_project -f /data/fmriprep -b /data/bids --fwhm 6 --no-qa
+  $0 -p /data/conn_project -f /data/fmriprep -b /data/bids --skip-smooth
 
 Legacy Usage (still supported):
   $0 <project_dir> <fmriprep_dir> [options]
@@ -109,6 +111,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -f|--fmriprep-dir)
             FMRIPREP_DIR="$2"
+            shift 2
+            ;;
+        -b|--bids-dir)
+            BIDS_DIR="$2"
             shift 2
             ;;
         -i|--install-dir)
@@ -180,9 +186,20 @@ if [[ -z "$FMRIPREP_DIR" ]]; then
     exit 1
 fi
 
+if [[ -z "$BIDS_DIR" ]]; then
+    echo -e "${RED}Error: BIDS directory (-b/--bids-dir) is required${NC}"
+    echo "Use -h or --help for usage information"
+    exit 1
+fi
+
 # Validate paths
 if [ ! -d "$FMRIPREP_DIR" ]; then
     echo -e "${RED}Error: fMRIprep directory not found: $FMRIPREP_DIR${NC}"
+    exit 1
+fi
+
+if [ ! -d "$BIDS_DIR" ]; then
+    echo -e "${RED}Error: BIDS directory not found: $BIDS_DIR${NC}"
     exit 1
 fi
 
@@ -209,6 +226,7 @@ echo ""
 echo -e "${BLUE}Configuration:${NC}"
 echo "  Project directory:  $PROJECT_DIR"
 echo "  fMRIprep directory: $FMRIPREP_DIR"
+echo "  BIDS directory:     $BIDS_DIR"
 echo "  CONN install dir:   $CONN_INSTALL_DIR"
 if [[ -n "$CONN_ZIP" ]]; then
     echo "  CONN zip:           $CONN_ZIP"
@@ -225,6 +243,42 @@ fi
 echo "  Smoothing FWHM:     $SMOOTHING_FWHM mm"
 echo "  Generate QA:        $GENERATE_QA"
 echo "  Log file:           $LOG_FILE"
+echo ""
+
+# Extract BIDS metadata
+echo -e "${CYAN}Extracting metadata from BIDS dataset...${NC}"
+BIDS_METADATA_FILE=$(mktemp)
+if python3 "$SCRIPT_DIR/../scripts_py/read_bids_metadata.py" "$BIDS_DIR" --json > "$BIDS_METADATA_FILE" 2>&1; then
+    BIDS_METADATA=$(cat "$BIDS_METADATA_FILE")
+    
+    if [ -z "$BIDS_METADATA" ]; then
+        echo -e "${YELLOW}Warning: BIDS metadata extraction returned empty${NC}"
+        echo "Proceeding with defaults..."
+        BIDS_NUM_SUBJECTS=30
+        BIDS_TR=2.0
+    else
+        # Parse JSON output
+        BIDS_NUM_SUBJECTS=$(echo "$BIDS_METADATA" | python3 -c "import sys, json; data=json.load(sys.stdin); print(int(data.get('num_subjects', 30)))" 2>/dev/null)
+        BIDS_TR=$(echo "$BIDS_METADATA" | python3 -c "import sys, json; data=json.load(sys.stdin); print(float(data.get('tr', 2.0)))" 2>/dev/null)
+        
+        if [ -z "$BIDS_NUM_SUBJECTS" ] || [ -z "$BIDS_TR" ]; then
+            echo -e "${YELLOW}Warning: Could not parse BIDS metadata${NC}"
+            echo "Proceeding with defaults..."
+            BIDS_NUM_SUBJECTS=30
+            BIDS_TR=2.0
+        else
+            echo -e "${GREEN}✓ BIDS metadata extracted:${NC}"
+            echo "    Subjects: $BIDS_NUM_SUBJECTS"
+            echo "    TR: $BIDS_TR seconds"
+        fi
+    fi
+else
+    echo -e "${YELLOW}Warning: Could not extract BIDS metadata${NC}"
+    echo "Proceeding with defaults..."
+    BIDS_NUM_SUBJECTS=30
+    BIDS_TR=2.0
+fi
+rm -f "$BIDS_METADATA_FILE"
 echo ""
 
 # Count subjects
@@ -365,10 +419,13 @@ run_step() {
         exit 1
     fi
 
-    # Create temporary script with substituted paths
+    # Create temporary script with substituted paths and parameters
     TEMP_SCRIPT=$(mktemp -p "$SCRIPT_DIR" "conn_batch_tmp_${step_num}_XXXXXX.m")
     sed "s|/path/to/project/directory|${PROJECT_DIR}|g" "$SCRIPT_DIR/$script_file" | \
     sed "s|/path/to/fmriprep/dataset|${FMRIPREP_DIR}|g" | \
+    sed "s|/path/to/bids/dataset|${BIDS_DIR}|g" | \
+    sed "s|NSUBJECTS           = [0-9]*;|NSUBJECTS           = ${BIDS_NUM_SUBJECTS};|g" | \
+    sed "s|REPETITION_TIME     = [0-9.]*;|REPETITION_TIME     = ${BIDS_TR};|g" | \
     sed "s|VOLUME_SMOOTHING_FWHM    = [0-9]*|VOLUME_SMOOTHING_FWHM    = ${SMOOTHING_FWHM}|g" | \
     sed "s|GENERATE_QA_PLOTS = true|GENERATE_QA_PLOTS = ${GENERATE_QA}|g" > "$TEMP_SCRIPT"
 

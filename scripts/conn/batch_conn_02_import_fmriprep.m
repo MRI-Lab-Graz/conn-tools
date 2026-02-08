@@ -1,21 +1,21 @@
 %% CONN Batch Script: Import fMRIprep Data (Step 2 of 4)
 %
-% This script imports preprocessed fMRIprep data into an existing CONN project.
+% This script imports PREPROCESSED fMRIprep data into an existing CONN project.
+% Uses CONN's native fMRIprep import (no additional SPM preprocessing).
 % Supports both single-session and multi-session studies.
 %
 % REQUIREMENTS:
 % - Existing CONN project (created with batch_conn_01_project_setup.m)
-% - fMRIprep preprocessed data (space-MNI152NLin2009cAsym or custom)
+% - fMRIprep preprocessed data in MNI space (space-MNI152NLin2009cAsym)
 %
 % USAGE:
 %   From MATLAB: batch_conn_02_import_fmriprep
 %   From command-line: conn batch batch_conn_02_import_fmriprep.m
 %
-% DATA DISCOVERY:
-% Automatically finds files matching:
-%   Structurals: sub-*/anat/*space-MNI152NLin2009cAsym*T1w.nii.gz
-%   Functionals: sub-*/func/*space-MNI152NLin2009cAsym*desc-preproc_bold.nii.gz
-%   (or sessions: sub-*/ses-*/func/...)
+% WORKFLOW:
+% 1. Load existing CONN project
+% 2. Import fMRIprep data directly (NO SPM preprocessing)
+% 3. Setup is validated automatically
 %
 % NEXT STEP:
 %   Run batch_conn_03_smooth.m to apply spatial smoothing
@@ -28,14 +28,15 @@
 % Project
 PROJECT_DIR     = '/path/to/project/directory'; % Must match batch_conn_01
 PROJECT_FILE    = 'conn_project.mat';           % Project filename
+BIDS_DIR        = '/path/to/bids/dataset';      % BIDS dataset root (for reference)
 
 % fMRIprep data
-FMRIPREP_DIR    = '/path/to/fmriprep/dataset'; % Root fMRIprep directory
-BIDS_SPACE      = 'MNI152NLin2009cAsym';       % Standard space used by fMRIprep
-USE_LOCAL_COPY  = 0;                           % 1: Copy files to project; 0: Use original files
+FMRIPREP_DIR    = '/path/to/fmriprep/dataset'; % Root fMRIprep derivatives/fmriprep directory
+BIDS_SPACE      = 'MNI152NLin2009cAsym';       % Standard space (must match fMRIprep output)
+USE_LOCAL_COPY  = 0;                           % 1: Copy files locally; 0: Link to original files
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% DATA DISCOVERY AND IMPORT
+%% IMPORT FMRIPREP DATA USING CONN'S BUILT-IN BIDS IMPORT
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 fprintf('\n============================================\n');
@@ -48,127 +49,184 @@ if ~isfile(project_path)
     error('Project file not found: %s\nRun batch_conn_01_project_setup.m first.', project_path);
 end
 
-fprintf('Loading project: %s\n', project_path);
+global CONN_x;
 
-% Initialize BATCH
-clear BATCH
-BATCH.filename = project_path;
+fprintf('Loading project: %s\n', project_path);
 
 % Verify fMRIprep directory
 if ~isfolder(FMRIPREP_DIR)
     error('fMRIprep directory not found: %s', FMRIPREP_DIR);
 end
 
-fprintf('Searching for fMRIprep data in: %s\n\n', FMRIPREP_DIR);
+fprintf('Importing from fMRIprep: %s\n', FMRIPREP_DIR);
+fprintf('Space: %s\n\n', BIDS_SPACE);
+
+% Initialize BATCH
+clear BATCH
+BATCH.filename = project_path;
+
+fprintf('Discovering preprocessed BOLD files...\n');
 
 % Find all subject directories
 subject_dirs = dir(fullfile(FMRIPREP_DIR, 'sub-*'));
 subject_dirs = subject_dirs([subject_dirs.isdir]);
 
 if isempty(subject_dirs)
-    error('No subject directories (sub-*) found in %s', FMRIPREP_DIR);
+    error('No subject directories found in %s', FMRIPREP_DIR);
 end
 
 fprintf('Found %d subjects\n\n', length(subject_dirs));
 
-% Update project to match actual number of subjects
-BATCH.Setup.nsubjects = length(subject_dirs);
+% Collect all files organized by subject/session
+functionals_by_subject = {};
+structurals_by_subject = cell(length(subject_dirs), 1);
+session_labels = {};
+subject_session_labels = cell(length(subject_dirs), 1);
+subject_session_files = cell(length(subject_dirs), 1);
+default_session_label = 'session1';
 
-% Initialize arrays
-functionals = {};
-structurals = {};
-
-% Loop through subjects and collect file paths
 for s = 1:length(subject_dirs)
     subject_name = subject_dirs(s).name;
-    fprintf('  %2d. %s', s, subject_name);
-    
     subject_path = fullfile(FMRIPREP_DIR, subject_name);
     
-    % ===== FUNCTIONAL DATA =====
-    % Find session directories (or use root if no sessions)
+    % Determine sessions (if missing assume single session)
     session_dirs = dir(fullfile(subject_path, 'ses-*'));
     session_dirs = session_dirs([session_dirs.isdir]);
     
-    session_funcs = {};
+    local_sessions = {};
+    local_files = {};
     
     if isempty(session_dirs)
-        % No sessions - look in func folder directly
+        % Single session (BIDS dataset without ses- directories)
         func_dir = fullfile(subject_path, 'func');
+        bold_pattern = sprintf('*space-%s*desc-preproc_bold.nii.gz', BIDS_SPACE);
+        bold_files = {};
         if isfolder(func_dir)
-            % Look for preprocessed BOLD files
-            bold_pattern = sprintf('*space-%s_desc-preproc_bold.nii.gz', BIDS_SPACE);
-            bold_files = dir(fullfile(func_dir, bold_pattern));
-            
-            for f = 1:length(bold_files)
-                session_funcs{end+1} = fullfile(bold_files(f).folder, bold_files(f).name);
+            bold_listing = dir(fullfile(func_dir, bold_pattern));
+            for f = 1:length(bold_listing)
+                bold_files{end+1} = fullfile(bold_listing(f).folder, bold_listing(f).name);
             end
         end
+        if ~isempty(bold_files)
+            local_sessions{end+1} = default_session_label;
+            local_files{end+1} = bold_files;
+        end
     else
-        % Multi-session study
+        % Multi-session - collect from each session folder
+        bold_pattern = sprintf('*space-%s*desc-preproc_bold.nii.gz', BIDS_SPACE);
         for sess = 1:length(session_dirs)
             func_dir = fullfile(subject_path, session_dirs(sess).name, 'func');
+            bold_files = {};
             if isfolder(func_dir)
-                bold_pattern = sprintf('*space-%s_desc-preproc_bold.nii.gz', BIDS_SPACE);
-                bold_files = dir(fullfile(func_dir, bold_pattern));
-                
-                for f = 1:length(bold_files)
-                    session_funcs{end+1} = fullfile(bold_files(f).folder, bold_files(f).name);
+                bold_listing = dir(fullfile(func_dir, bold_pattern));
+                for f = 1:length(bold_listing)
+                    bold_files{end+1} = fullfile(bold_listing(f).folder, bold_listing(f).name);
                 end
+            end
+            if ~isempty(bold_files)
+                local_sessions{end+1} = session_dirs(sess).name;
+                local_files{end+1} = bold_files;
             end
         end
     end
-    
-    if ~isempty(session_funcs)
-        functionals{s} = session_funcs;
-        fprintf(' - %d func(s)', length(session_funcs));
-    else
-        fprintf(' - NO FUNCTIONALS FOUND');
-        functionals{s} = {};
+
+    if isempty(local_sessions)
+        fprintf('Warning: No BOLD files found for %s in space %s\n', subject_name, BIDS_SPACE);
+        local_sessions{end+1} = default_session_label;
+        local_files{end+1} = {};
     end
     
-    % ===== STRUCTURAL DATA =====
+    subject_session_labels{s} = local_sessions;
+    subject_session_files{s} = local_files;
+    session_labels = [session_labels, local_sessions];
+
+    % Find structural (use same for all sessions if multi-session)
     anat_dir = fullfile(subject_path, 'anat');
     struct_file = '';
-    
     if isfolder(anat_dir)
-        % Look for normalized T1w
+        % MNI-space T1w preferred
         anat_pattern = sprintf('*space-%s*T1w.nii.gz', BIDS_SPACE);
         anat_files = dir(fullfile(anat_dir, anat_pattern));
         
         if ~isempty(anat_files)
             struct_file = fullfile(anat_files(1).folder, anat_files(1).name);
-            fprintf(' - struct(MNI)');
         else
-            % Fallback to brain-extracted T1w
-            anat_files = dir(fullfile(anat_dir, '*_brain_*.nii.gz'));
+            % Fallback to native space
+            anat_files = dir(fullfile(anat_dir, '*_T1w.nii.gz'));
             if ~isempty(anat_files)
                 struct_file = fullfile(anat_files(1).folder, anat_files(1).name);
-                fprintf(' - struct(native)');
             end
         end
     end
     
-    structurals{s} = struct_file;
-    fprintf('\n');
+    structurals_by_subject{s} = struct_file;
 end
 
-fprintf('\n');
+session_labels = unique(session_labels, 'stable');
+if isempty(session_labels)
+    session_labels = {default_session_label};
+end
 
-% Assign to BATCH
-BATCH.Setup.structurals = structurals;
-BATCH.Setup.functionals = functionals;
+nsessions_total = numel(session_labels);
+fprintf('Detected %d unique session label(s)\n\n', nsessions_total);
+
+% Map session labels to columns
+session_index_map = containers.Map(session_labels, 1:nsessions_total);
+
+% Initialize storage grid and fill with discovered files
+functionals_by_subject = repmat({{}}, length(subject_dirs), nsessions_total);
+for s = 1:length(subject_dirs)
+    local_sessions = subject_session_labels{s};
+    local_files = subject_session_files{s};
+    for ss = 1:length(local_sessions)
+        label = local_sessions{ss};
+        idx = session_index_map(label);
+        functionals_by_subject{s, idx} = local_files{ss};
+    end
+end
+
+fprintf('Collected files for all subjects and sessions\n\n');
+
+% Set up BATCH for import
+fprintf('Assigning imports to CONN project...\n');
+BATCH.Setup.functionals = functionals_by_subject;
+BATCH.Setup.structurals = structurals_by_subject;
 BATCH.Setup.localcopy = USE_LOCAL_COPY;
 
-% NOW run setup with imported data and validation
-fprintf('Importing data and validating CONN project...\n');
+% Define a single resting-state condition across all discovered sessions
+nsubjects = size(functionals_by_subject, 1);
+nsessions_total = size(functionals_by_subject, 2);
+BATCH.Setup.conditions.names = {'rest'};
+BATCH.Setup.conditions.onsets = {repmat({{}}, nsubjects, 1)};
+BATCH.Setup.conditions.durations = {repmat({{}}, nsubjects, 1)};
+for nsub = 1:nsubjects
+    for nses = 1:nsessions_total
+        BATCH.Setup.conditions.onsets{1}{nsub}{nses} = 0;
+        BATCH.Setup.conditions.durations{1}{nsub}{nses} = inf;
+    end
+end
+BATCH.Setup.conditions.missingdata = 1;
+
+% Run setup and import
+fprintf('Importing into CONN project...\n');
 BATCH.Setup.done = 1;
 BATCH.Setup.overwrite = 1;
-conn_batch(BATCH);
+
+try
+    conn_batch(BATCH);
+catch ME
+    fprintf('Error during import: %s\n', ME.message);
+    rethrow(ME);
+end
+
+fprintf('\nSetting up resting-state condition for each session...\n');
+conn_importcondition(struct('conditions', {{'rest'}}, 'onsets', 0, 'durations', inf, 'breakconditionsbysession', false, 'deleteall', false), ...
+    'subjects', 1:CONN_x.Setup.nsubjects, 'sessions', 0);
 
 fprintf('\n============================================\n');
 fprintf('Data Import Complete\n');
 fprintf('============================================\n');
 fprintf('Imported: %d subjects\n', length(subject_dirs));
+fprintf('Space: %s\n', BIDS_SPACE);
 fprintf('Project: %s\n', project_path);
-fprintf('\nNext step: Run batch_conn_03_smooth.m to apply smoothing\n\n');
+fprintf('\nNext step: Run batch_conn_03_smooth.m to apply spatial smoothing\n\n');
