@@ -187,7 +187,7 @@ end
 
 fprintf('Collected files for all subjects and sessions\n\n');
 
-% Set up BATCH for import
+% Set up BATCH for import (no ROI/preprocessing)
 fprintf('Assigning imports to CONN project...\n');
 BATCH.Setup.functionals = functionals_by_subject;
 BATCH.Setup.structurals = structurals_by_subject;
@@ -207,21 +207,86 @@ for nsub = 1:nsubjects
 end
 BATCH.Setup.conditions.missingdata = 1;
 
-% Run setup and import
-fprintf('Importing into CONN project...\n');
-BATCH.Setup.done = 1;
+% Run import only (no preprocessing/segmentation/ROI)
+fprintf('Importing into CONN project (import only, no preprocessing)...\n');
+BATCH.Setup.done = 0;
 BATCH.Setup.overwrite = 1;
 
 try
     conn_batch(BATCH);
 catch ME
     fprintf('Error during import: %s\n', ME.message);
+    if isfield(ME, 'identifier') && ~isempty(ME.identifier)
+        fprintf('  Identifier: %s\n', ME.identifier);
+    end
+    fprintf('  Stack:\n');
+    for s = 1:length(ME.stack)
+        fprintf('    %s (line %d)\n', ME.stack(s).file, ME.stack(s).line);
+    end
     rethrow(ME);
 end
 
 fprintf('\nSetting up resting-state condition for each session...\n');
-conn_importcondition(struct('conditions', {{'rest'}}, 'onsets', 0, 'durations', inf, 'breakconditionsbysession', false, 'deleteall', false), ...
-    'subjects', 1:CONN_x.Setup.nsubjects, 'sessions', 0);
+% Use local nsubjects instead of CONN_x.Setup.nsubjects since setup wasn't run
+try
+    conn_importcondition(struct('conditions', {{'rest'}}, 'onsets', 0, 'durations', inf, 'breakconditionsbysession', false, 'deleteall', false), ...
+        'subjects', 1:nsubjects, 'sessions', 0);
+catch ME
+    fprintf('Warning: conn_importcondition failed: %s\n', ME.message);
+end
+
+fprintf('\nImporting ROIs (standard CONN atlas)...\n');
+% Import CONN's standard atlas without triggering internal segmentation
+try
+    BATCH_ROI = [];
+    BATCH_ROI.filename = project_path;
+    % Import the Networks atlas (common default in CONN)
+    BATCH_ROI.Setup.rois.files = {fullfile(fileparts(which('conn')), 'rois', 'networks.nii')};
+    BATCH_ROI.Setup.rois.names = {'Networks'};
+    
+    % Check if atlas file exists, use fallback if needed
+    atlas_file = BATCH_ROI.Setup.rois.files{1};
+    if ~isfile(atlas_file)
+        fprintf('Warning: Standard atlas not found at %s\n', atlas_file);
+        fprintf('Attempting to use default CONN atlas location...\n');
+        % Try alternative paths
+        conn_root = fileparts(fileparts(which('conn')));
+        alt_paths = {
+            fullfile(conn_root, 'conn', 'rois', 'networks.nii')
+            fullfile(conn_root, 'rois', 'networks.nii')
+            fullfile(conn_root, 'atlases', 'networks.nii')
+        };
+        found = false;
+        for p = 1:length(alt_paths)
+            if isfile(alt_paths{p})
+                BATCH_ROI.Setup.rois.files = {alt_paths{p}};
+                fprintf('Found atlas at: %s\n', alt_paths{p});
+                found = true;
+                break;
+            end
+        end
+        if ~found
+            fprintf('Warning: Could not locate CONN atlas files. Skipping ROI import.\n');
+            fprintf('You can import ROIs later from the CONN GUI.\n');
+        end
+    end
+    
+    if isfile(BATCH_ROI.Setup.rois.files{1})
+        % Disable all preprocessing steps to avoid corruption
+        BATCH_ROI.Setup.preprocessing.steps = {};
+        % Run setup to extract ROI timeseries
+        BATCH_ROI.Setup.done = 1;
+        BATCH_ROI.Setup.overwrite = 1;
+        
+        conn_batch(BATCH_ROI);
+        fprintf('ROIs imported and timeseries extracted successfully.\n');
+    end
+    
+catch ME
+    fprintf('Warning: ROI import failed: %s\n', ME.message);
+    fprintf('You can import ROIs later from the CONN GUI.\n');
+end
+
 
 fprintf('\n============================================\n');
 fprintf('Data Import Complete\n');

@@ -1,0 +1,28 @@
+{
+  "smoothing": {
+    "type": "volume",
+    "fwhm": 8,
+    "enabled": true,
+    "surface_steps": 5
+  },
+  "denoising": {
+    "bandpass_filter": {
+      "low": 0.008,
+      "high": "Inf"
+    },
+    "detrending_order": 1,
+    "despiking": false,
+    "regbp_order": 1,
+    "confounds": "standard",
+    "motion_derivatives": false,
+    "scrubbing": false
+  },
+  "rois": {
+    "import_atlas": true,
+    "atlas_file": "networks.nii",
+    "extract_timeseries": true
+  },
+  "qa": {
+    "generate_plots": true
+  }
+}

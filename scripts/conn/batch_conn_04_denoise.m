@@ -85,8 +85,18 @@ BATCH.filename = project_path;
 fprintf('Denoising configuration:\n');
 fprintf('  Band-pass filter: %.3f - %.1f Hz\n', BANDPASS_LOW, BANDPASS_HIGH);
 fprintf('  Detrending order: %d\n', DETRENDING_ORDER);
-fprintf('  Despiking: %s\n', iif(DESPIKING_ENABLED, 'enabled', 'disabled'));
-fprintf('  Reg-BP order: %d (%s)\n', REGBP_ORDER, iif(REGBP_ORDER==1, 'RegBP', 'Simult'));
+if DESPIKING_ENABLED
+    despiking_status = 'enabled';
+else
+    despiking_status = 'disabled';
+end
+if REGBP_ORDER==1
+    regbp_label = 'RegBP';
+else
+    regbp_label = 'Simult';
+end
+fprintf('  Despiking: %s\n', despiking_status);
+fprintf('  Reg-BP order: %d (%s)\n', REGBP_ORDER, regbp_label);
 
 % Select confounds
 if USE_STANDARD_CONFOUNDS
@@ -103,7 +113,12 @@ else
     fprintf('  Motion derivatives: No\n');
 end
 
-fprintf('  Scrubbing: %s\n\n', iif(SCRUBBING_ENABLED, 'enabled', 'disabled'));
+if SCRUBBING_ENABLED
+    scrubbing_status = 'enabled';
+else
+    scrubbing_status = 'disabled';
+end
+fprintf('  Scrubbing: %s\n\n', scrubbing_status);
 
 % Configure denoising
 BATCH.Denoising.filter = [BANDPASS_LOW BANDPASS_HIGH];
@@ -122,6 +137,8 @@ end
 fprintf('Running denoising...\n');
 BATCH.Denoising.done = 1;
 BATCH.Denoising.overwrite = 1;
+% Skip full setup (data already preprocessed by fMRIprep)
+BATCH.Setup.done = 0;
 
 try
     conn_batch(BATCH);
@@ -134,18 +151,24 @@ end
 % ===== QUALITY ASSURANCE PLOTS =====
 
 if GENERATE_QA_PLOTS
-    fprintf('Generating QA plots...\n');
-    
-    BATCH_QA = [];
-    BATCH_QA.filename = project_path;
-    BATCH_QA.QA.plots = [2, 11, 12, 13];  % Mean func, denoise hist, timeseries, FC-QC
-    BATCH_QA.QA.foldername = fullfile(PROJECT_DIR, 'results', 'qa');
-    
-    try
-        conn_batch(BATCH_QA);
-        fprintf('QA plots generated in: %s\n\n', BATCH_QA.QA.foldername);
-    catch ME
-        fprintf('Warning: QA plot generation failed: %s\n\n', ME.message);
+    roi_probe = fullfile(PROJECT_DIR, 'conn_project', 'data', 'ROI_Subject001_Session001.mat');
+    if ~isfile(roi_probe)
+        fprintf('Warning: ROI timeseries files missing: %s\n', roi_probe);
+        fprintf('Skipping QA plots that require ROI data.\n\n');
+    else
+        fprintf('Generating QA plots...\n');
+
+        BATCH_QA = [];
+        BATCH_QA.filename = project_path;
+        BATCH_QA.QA.plots = [2, 11, 12, 13];  % Mean func, denoise hist, timeseries, FC-QC
+        BATCH_QA.QA.foldername = fullfile(PROJECT_DIR, 'results', 'qa');
+
+        try
+            conn_batch(BATCH_QA);
+            fprintf('QA plots generated in: %s\n\n', BATCH_QA.QA.foldername);
+        catch ME
+            fprintf('Warning: QA plot generation failed: %s\n\n', ME.message);
+        end
     end
 end
 
@@ -173,13 +196,4 @@ fprintf('  - Voxel-to-Voxel connectivity\n');
 fprintf('  - Dynamic connectivity\n');
 fprintf('  - Network-based statistics\n\n');
 
-% ===== HELPER FUNCTION =====
 
-function result = iif(condition, true_val, false_val)
-    % Inline if function
-    if condition
-        result = true_val;
-    else
-        result = false_val;
-    end
-end

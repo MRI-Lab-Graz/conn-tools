@@ -84,7 +84,7 @@ end
 
 % Run preprocessing
 fprintf('Applying smoothing...\n');
-BATCH.Setup.done = 1;
+BATCH.Setup.done = 0;
 BATCH.Setup.overwrite = 1;
 
 try

@@ -17,11 +17,13 @@ import sys
 import os
 import argparse
 import json
+import re
 import subprocess
 import tempfile
 import shutil
 from pathlib import Path
 from datetime import datetime
+from collections import deque
 
 # Colors for output
 class Colors:
@@ -58,6 +60,102 @@ def log(message, level="INFO", color=None):
             color = Colors.CYAN
     
     print(f"{color}[{timestamp}] {level}: {message}{Colors.ENDC}")
+
+def tail_file(path, line_count=200):
+    """Return the last N lines of a text file."""
+    try:
+        with open(path, 'r', errors='ignore') as handle:
+            return ''.join(deque(handle, maxlen=line_count))
+    except Exception as exc:
+        return f"[Unable to read {path}: {exc}]\n"
+
+def append_conn_project_logs(project_dir, log_file):
+    """Append CONN project log summaries to the pipeline log."""
+    conn_project_dir = os.path.join(project_dir, 'conn_project')
+    if not os.path.isdir(conn_project_dir):
+        return
+
+    entries = ['logfile.txt', 'statusfile.open']
+    with open(log_file, 'a') as handle:
+        handle.write('\n--- CONN project logs ---\n')
+        for entry in entries:
+            fullpath = os.path.join(conn_project_dir, entry)
+            if os.path.isfile(fullpath):
+                handle.write(f"\n[{entry}]\n")
+                handle.write(tail_file(fullpath))
+
+def extract_failure_subject_session(stdout_content):
+    """Extract last 'Subject X Session Y' from CONN output if present."""
+    matches = re.findall(r"Subject\s+(\d+)\s+Session\s+(\d+)", stdout_content)
+    if not matches:
+        return None, None
+    subject_str, session_str = matches[-1]
+    try:
+        return int(subject_str), int(session_str)
+    except ValueError:
+        return None, None
+
+def append_subject_diagnostics(log_file, fmriprep_dir, subject_index, session_index, sessions=None):
+    """Append subject/session file diagnostics to the pipeline log."""
+    if subject_index is None or session_index is None:
+        return
+
+    subject_dirs = sorted([p for p in Path(fmriprep_dir).glob('sub-*') if p.is_dir()])
+    if subject_index < 1 or subject_index > len(subject_dirs):
+        return
+
+    subject_dir = subject_dirs[subject_index - 1]
+    session_label = None
+    if sessions and session_index <= len(sessions):
+        session_label = sessions[session_index - 1]
+    else:
+        session_label = f"ses-{session_index}"
+
+    func_dir = subject_dir / session_label / 'func'
+    anat_dir = subject_dir / 'anat'
+    func_files = []
+    if func_dir.is_dir():
+        func_files = sorted(func_dir.glob('*space-MNI152NLin2009cAsym*desc-preproc_bold.nii.gz'))
+
+    anat_files = []
+    if anat_dir.is_dir():
+        anat_files = sorted(anat_dir.glob('*space-MNI152NLin2009cAsym*T1w.nii.gz'))
+        if not anat_files:
+            anat_files = sorted(anat_dir.glob('*_T1w.nii.gz'))
+
+    with open(log_file, 'a') as handle:
+        handle.write('\n--- Subject/session diagnostics ---\n')
+        handle.write(f"Subject index: {subject_index}\n")
+        handle.write(f"Session index: {session_index}\n")
+        handle.write(f"Subject dir: {subject_dir}\n")
+        handle.write(f"Session label: {session_label}\n")
+
+        handle.write('\n[Functional files]\n')
+        if not func_files:
+            handle.write('  (none found)\n')
+        for f in func_files:
+            handle.write(f"  {f} ({f.stat().st_size} bytes)\n")
+
+        handle.write('\n[Structural files]\n')
+        if not anat_files:
+            handle.write('  (none found)\n')
+        for f in anat_files:
+            handle.write(f"  {f} ({f.stat().st_size} bytes)\n")
+
+        try:
+            import nibabel as nib
+            import numpy as np
+            handle.write('\n[NIfTI read check]\n')
+            for f in func_files + anat_files:
+                try:
+                    img = nib.load(str(f))
+                    _ = np.asanyarray(img.dataobj[..., 0])
+                    handle.write(f"  OK: {f} shape={img.shape}\n")
+                except Exception as exc:
+                    handle.write(f"  FAIL: {f} error={exc}\n")
+        except Exception as exc:
+            handle.write(f"\n[NIfTI read check unavailable: {exc}]\n")
+    
 
 def validate_fmriprep_derivatives(fmriprep_dir):
     """Run gunzip -t on key fMRIprep outputs to catch corrupt volumes early."""
@@ -169,7 +267,7 @@ def create_matlab_script(template_path, output_path, substitutions):
         log(f"Failed to create MATLAB script: {e}", "ERROR")
         return False
 
-def run_matlab_step(step_num, step_name, batch_script, conn_runner, project_dir, log_file):
+def run_matlab_step(step_num, step_name, batch_script, conn_runner, project_dir, log_file, fmriprep_dir=None, sessions=None):
     """Run a MATLAB batch step with streamed output"""
     log(f"Step {step_num}: {step_name}", "INFO", Colors.BLUE)
     log("=" * 70, "INFO")
@@ -208,6 +306,10 @@ def run_matlab_step(step_num, step_name, batch_script, conn_runner, project_dir,
                 f.write(f"\n[FAILED] Step {step_num}: {step_name}\n")
                 f.write(f"Command: {cmd}\n")
                 f.write(stdout_content)
+            append_conn_project_logs(project_dir, log_file)
+            if fmriprep_dir:
+                subject_index, session_index = extract_failure_subject_session(stdout_content)
+                append_subject_diagnostics(log_file, fmriprep_dir, subject_index, session_index, sessions)
             return False
 
         log(f"Step {step_num} COMPLETED", "SUCCESS")
@@ -246,6 +348,8 @@ Examples:
                         help='CONN installation directory (default: ~/conn_standalone)')
     parser.add_argument('--fwhm', type=int, default=8,
                         help='Smoothing kernel size in mm (default: 8)')
+    parser.add_argument('--config', type=str,
+                        help='Path to pipeline configuration JSON file')
     parser.add_argument('--no-qa', action='store_true',
                         help='Do not generate QA plots')
     
@@ -260,6 +364,14 @@ Examples:
                         help='Skip Step 4 (no denoising)')
     
     args = parser.parse_args()
+    
+    # Load config file if provided
+    if args.config and os.path.exists(args.config):
+        with open(args.config, 'r') as f:
+            config = json.load(f)
+        # Override args with config values
+        if 'smoothing' in config and config['smoothing'].get('enabled', True):
+            args.fwhm = config['smoothing'].get('fwhm', args.fwhm)
     
     # Convert paths to absolute paths and remove trailing slashes
     args.project_dir = os.path.abspath(args.project_dir).rstrip('/')
@@ -364,7 +476,7 @@ Examples:
         }
         
         if create_matlab_script(import_script_template, import_script, substitutions):
-            if not run_matlab_step(2, 'Import fMRIprep Data', import_script, conn_runner, args.project_dir, log_file):
+            if not run_matlab_step(2, 'Import fMRIprep Data', import_script, conn_runner, args.project_dir, log_file, fmriprep_dir=args.fmriprep_dir, sessions=sessions):
                 sys.exit(1)
         else:
             sys.exit(1)
