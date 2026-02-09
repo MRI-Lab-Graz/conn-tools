@@ -22,6 +22,11 @@
     "atlas_file": "networks.nii",
     "extract_timeseries": true
   },
+  "analysis": {
+    "roi_to_roi": true,
+    "seed_to_voxel": true,
+    "local_correlation": true
+  },
   "qa": {
     "generate_plots": true
   }

@@ -236,7 +236,7 @@ catch ME
 end
 
 fprintf('\nImporting ROIs (standard CONN atlas)...\n');
-% Import CONN's standard atlas without triggering internal segmentation
+% Import CONN's standard atlas definition (timeseries extraction happens during analysis)
 try
     BATCH_ROI = [];
     BATCH_ROI.filename = project_path;
@@ -272,14 +272,14 @@ try
     end
     
     if isfile(BATCH_ROI.Setup.rois.files{1})
-        % Disable all preprocessing steps to avoid corruption
-        BATCH_ROI.Setup.preprocessing.steps = {};
-        % Run setup to extract ROI timeseries
-        BATCH_ROI.Setup.done = 1;
+        % Import ROI definitions only (don't extract timeseries yet)
+        % Timeseries extraction will happen automatically during first-level analysis
+        BATCH_ROI.Setup.done = 0;
         BATCH_ROI.Setup.overwrite = 1;
         
         conn_batch(BATCH_ROI);
-        fprintf('ROIs imported and timeseries extracted successfully.\n');
+        fprintf('ROI atlas imported successfully.\n');
+        fprintf('Note: ROI timeseries will be extracted automatically during first-level analysis.\n');
     end
     
 catch ME

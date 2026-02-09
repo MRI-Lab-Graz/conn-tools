@@ -153,8 +153,8 @@ end
 if GENERATE_QA_PLOTS
     roi_probe = fullfile(PROJECT_DIR, 'conn_project', 'data', 'ROI_Subject001_Session001.mat');
     if ~isfile(roi_probe)
-        fprintf('Warning: ROI timeseries files missing: %s\n', roi_probe);
-        fprintf('Skipping QA plots that require ROI data.\n\n');
+        fprintf('Note: ROI timeseries files will be generated during first-level analysis.\n');
+        fprintf('Skipping QA plots that require ROI timeseries data.\n\n');
     else
         fprintf('Generating QA plots...\n');
 
